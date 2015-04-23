@@ -45,6 +45,7 @@ def get_freqitemsets(fname, minsupport=10, maxlhs = 2):
     itemsets = [r[0] for r in fpgrowth(data_pos,supp=minsupport,zmax=maxlhs)]
     print "About to calculate negative itemsets"
     itemsets.extend([r[0] for r in fpgrowth(data_neg,supp=minsupport,zmax=maxlhs)])
+    itemsets = list(set(itemsets))
     print "Done"
         
     n_rules = len(itemsets)

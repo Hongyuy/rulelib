@@ -1,4 +1,4 @@
-/*
+    /*
  * Program to read in lines of rule/evaluation pairs where rule is a string
  * representing a rule and the evaluation is a vector of 1's and 0's indicating
  * whether the ith sample evaluates to true or false for the given rule.
@@ -26,9 +26,9 @@ gsl_rng *RAND_GSL;
 /* Convenient macros. */
 #define RANDOM_RANGE(lo, hi) \
     (unsigned)(lo + (unsigned)((random() / (float)RAND_MAX) * (hi - lo + 1)))
-#define DEFAULT_RULESET_SIZE  4
+#define DEFAULT_RULESET_SIZE  3
 #define DEFAULT_RULE_CARDINALITY 3
-#define MAX_RULE_CARDINALITY 10
+#define MAX_RULE_CARDINALITY 2
 #define NLABELS 2
 
 #define LAMBDA 3.0
@@ -44,6 +44,7 @@ double compute_log_posterior(ruleset_t *, rule_t *, int, rule_t *);
 void init_gsl_rand_gen();
 int gen_poission(double);
 void gsl_ran_poisson_test();
+void sanity_check_with_python(int, int, int, int, rule_t *, rule_t *);
 
 int debug;
 
@@ -130,6 +131,7 @@ main (int argc, char *argv[])
     
 	//run_experiment(iters, size, nsamples, nrules, rules);
     int init_size = size;
+    sanity_check_with_python(10, init_size, nsamples, nrules, rules, labels);
     run_mcmc(iters, init_size, nsamples, nrules, rules, labels);
 }
 
@@ -151,7 +153,7 @@ try_again:	next = RANDOM_RANGE(1, (nrules - 1));
 
 	/* Always put rule 0 (the default) as the last rule. */
 	ids[i] = 0;
-
+    
 	return(ruleset_init(size, nsamples, ids, rules, rs));
 }
 
@@ -345,7 +347,7 @@ ruleset_backup(ruleset_t *rs, int **rs_idarray, double log_post_rs, double *max_
 }
 
 double compute_log_posterior(ruleset_t *rs, rule_t *rules, int nrules, rule_t *labels) {
-    double log_prior = 0.0, log_likelihood = 0.0;
+    double log_prior = 0.0, log_likelihood = 0.0, norm_constant;
     static double eta_norm = 0;
     static double *log_lambda_pmf=NULL, *log_eta_pmf=NULL;
     int i,j,k,li;
@@ -353,30 +355,51 @@ double compute_log_posterior(ruleset_t *rs, rule_t *rules, int nrules, rule_t *l
     if (log_lambda_pmf == NULL) {
         log_lambda_pmf = malloc(nrules*sizeof(double));
         log_eta_pmf = malloc((1+MAX_RULE_CARDINALITY)*sizeof(double));
-        for (int i=0; i < nrules; i++)
+        for (int i=0; i < nrules; i++) {
             log_lambda_pmf[i] = log(gsl_ran_poisson_pdf(i, LAMBDA));
-        for (int i=0; i <= MAX_RULE_CARDINALITY; i++)
+//            printf("log_lambda_pmf[ %d ] = %6f\n", i, log_lambda_pmf[i]);
+        }
+        for (int i=0; i <= MAX_RULE_CARDINALITY; i++) {
             log_eta_pmf[i] = log(gsl_ran_poisson_pdf(i, ETA));
+//            printf("log_eta_pmf[ %d ] = %6f\n", i, log_eta_pmf[i]);
+        }
+        /* 
+         for simplicity, assume that all the cardinalities <= MAX_RULE_CARDINALITY 
+         appear in the mined rules
+         */
+        eta_norm = gsl_cdf_poisson_P(MAX_RULE_CARDINALITY, ETA) - gsl_ran_poisson_pdf(0, ETA);
+//        printf("eta_norm(Beta_Z) = %6f\n", eta_norm);
     }
     /* calculate log_prior */
     int card_count[1 + MAX_RULE_CARDINALITY];
     for (i=0; i <= MAX_RULE_CARDINALITY; i++) card_count[i] = 0;
     int maxcard = 0;
-    for (i=0; i < rs->n_rules; i++){
-        card_count[rules[rs->rules[i].rule_id].cardinality]++;
-        if (rules[rs->rules[i].rule_id].cardinality > maxcard)
-            maxcard = rules[rs->rules[i].rule_id].cardinality;
+    
+    for (i=0; i < nrules; i++){
+        card_count[rules[i].cardinality]++;
+        if (rules[i].cardinality > maxcard)
+            maxcard = rules[i].cardinality;
     }
     
+//    for (i=0; i<=MAX_RULE_CARDINALITY; i++)
+//        printf("there are %d rules with cardinality %d\n", card_count[i], i);
+    /*
+     For simplicity, this was not used in BRL_code.py,
+     eta_norm was pre-calculated in the prior pre-calculation section
+     */
+    //eta_norm = gsl_cdf_poisson_P(maxcard, ETA) - gsl_ran_poisson_pdf(0, ETA);
+    norm_constant = eta_norm;
     log_prior += log_lambda_pmf[rs->n_rules-1];
-    eta_norm = gsl_cdf_poisson_P(maxcard, ETA) - gsl_ran_poisson_pdf(0, ETA);
     for (i=0; i < rs->n_rules-1; i++){ //don't compute the last rule(default rule).
         li = rules[rs->rules[i].rule_id].cardinality;
-        log_prior += log_eta_pmf[li] - log(eta_norm);
+        if (log(norm_constant) != log(norm_constant)) printf("\n NAN here log(eta_norm) at i= %d \t eta_norm = %6f",i, eta_norm);
+        log_prior += log_eta_pmf[li] - log(norm_constant);
+        if (log_prior != log_prior) printf("\n NAN here at i= %d ",i);
         log_prior += -log(card_count[li]);
+        if (log_prior != log_prior) printf("\n NAN here at i= %d ",i);
         card_count[li]--;
         if (card_count[li] == 0)
-            eta_norm -= exp(log_eta_pmf[li]);
+            norm_constant -= exp(log_eta_pmf[li]);
     }
     /* calculate log_likelihood */
     VECTOR v0;
@@ -577,4 +600,34 @@ gsl_ran_poisson_test() {
             printf("*");
         printf("\n");
     }
+}
+/*
+ randomly generate @iters rulesets and calculate
+ the log_prior and log_posterior probability
+ from C and Python separately. Output to screen
+ */
+void
+sanity_check_with_python(int iters, int init_size, int nsamples, int nrules, rule_t *rules, rule_t *labels) {
+    int i,j,t, rand_size;
+    double log_post_rs=0.0;
+    const char *outfile = "cross_check_list.csv";
+    FILE *fout;
+    ruleset_t *rs;
+    int ret;
+    
+    init_gsl_rand_gen();
+    fout = fopen(outfile, "w");
+    for (i = 0; i<iters; i++) {
+        rand_size = RANDOM_RANGE(1, nrules);
+        printf("ruleset[ %d ], size = %d:\n", i, rand_size);
+        create_random_ruleset(rand_size, nsamples, nrules, rules, &rs);
+        log_post_rs = compute_log_posterior(rs, rules, nrules, labels);
+        for (j=0; j<rand_size-1; j++)
+            fprintf(fout, "%d,", rs->rules[j].rule_id);
+        fprintf(fout, "%d\n", rs->rules[rand_size-1].rule_id);
+    }
+    fclose(fout);
+    
+    ret = system("python cross_check.py cross_check_list.csv");
+    // option: generate outputs from C code and Python code, then diff.
 }
