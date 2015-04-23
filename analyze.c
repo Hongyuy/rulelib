@@ -131,7 +131,7 @@ main (int argc, char *argv[])
     
 	//run_experiment(iters, size, nsamples, nrules, rules);
     int init_size = size;
-    sanity_check_with_python(10, init_size, nsamples, nrules, rules, labels);
+    //sanity_check_with_python(10, init_size, nsamples, nrules, rules, labels);
     run_mcmc(iters, init_size, nsamples, nrules, rules, labels);
 }
 
@@ -242,7 +242,7 @@ run_mcmc(int iters, int init_size, int nsamples, int nrules, rule_t *rules, rule
     ruleset_t *rs, *rs_proposal=NULL, *rs_temp=NULL;
     double jump_prob, log_post_rs=0.0, log_post_rs_proposal=0.0;
     int *rs_idarray, len;
-    double max_log_posterior = 1e-9;
+    double max_log_posterior = -1e9;
     /* initialize random number generator for some distrubitions */
     init_gsl_rand_gen();
     //gsl_ran_poisson_test();
@@ -322,16 +322,17 @@ run_mcmc(int iters, int init_size, int nsamples, int nrules, rule_t *rules, rule
             rs = rs_proposal;
             log_post_rs = log_post_rs_proposal;
             rs_proposal = NULL;
-            ruleset_backup(rs, &rs_idarray, log_post_rs, &max_log_posterior);
-            len = rs->n_rules;
-            printf("yes!\n");
+            if (log_post_rs>max_log_posterior) {
+                ruleset_backup(rs, &rs_idarray, log_post_rs, &max_log_posterior);
+                len = rs->n_rules;
+            }
         }
     }
     /* regenerate the best rule list */
     printf("\n\n/*----The best rule list is: */\n");
     ruleset_init(len, nsamples, rs_idarray, rules, &rs);
     for (int i=0; i < len; i++) printf("rule[%d]_id = %d\n", i, rs_idarray[i]);
-    printf("nmax_log_posterior = %6f\n\n", max_log_posterior);
+    printf("max_log_posterior = %6f\n\n", max_log_posterior);
     ruleset_print(rs, rules);
 }
 
@@ -629,5 +630,6 @@ sanity_check_with_python(int iters, int init_size, int nsamples, int nrules, rul
     fclose(fout);
     
     ret = system("python cross_check.py cross_check_list.csv");
+    free(rs);
     // option: generate outputs from C code and Python code, then diff.
 }
